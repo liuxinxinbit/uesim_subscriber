@@ -12,116 +12,144 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <chrono>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
-#include <opencv2/opencv.hpp>
-#include <fcntl.h>      // O_RDONLY
-#include <sys/mman.h>   // mmap
-#include <unistd.h>     // ftruncate, close
-#include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/image.hpp"
-#include "cv_bridge/cv_bridge.h"
+#include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
-#include "image_transport/image_transport.hpp"
-#include "rclcpp/qos.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp"
-#include "pcl_conversions/pcl_conversions.h"
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <image_transport/image_transport.hpp>
+#include <cv_bridge/cv_bridge.h>
+#include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-using std::placeholders::_1;
+#include <opencv2/opencv.hpp>
 
-#define WIDTH 1920
-#define HEIGHT 1080
-int64_t camera_num = 0;
-int64_t lidar_num = 0;
-cv::Mat Global_Depth_Image = cv::Mat::zeros(800, 1280, CV_8UC3);
-cv::Mat Merge_Image = cv::Mat::zeros(1600, 2560, CV_8UC3);
-class VCFSubscriber : public rclcpp::Node
+namespace vcf_sensor
+{
+
+// ======================== 工具函数 ========================
+
+constexpr float MAX_DEPTH = 10.0f;
+
+inline rclcpp::QoS default_qos()
+{
+  rclcpp::QoS qos(1);
+  return qos.reliable().durability_volatile().best_effort();
+}
+
+// ======================== RGB相机回调 ========================
+
+void rgb_callback(const sensor_msgs::msg::CompressedImage::SharedPtr & msg, uint64_t & counter)
+{
+  cv_bridge::CvImagePtr cv_ptr;
+  try {
+    cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+  } catch (const cv_bridge::Exception & e) {
+    RCLCPP_ERROR(rclcpp::get_logger("rgb_callback"), "图像转换失败: %s", e.what());
+    return;
+  }
+
+  ++counter;
+  RCLCPP_INFO(rclcpp::get_logger("rgb_callback"),
+              "RGB 图像: %dx%d  序号: %lu",
+              cv_ptr->image.cols, cv_ptr->image.rows, counter);
+
+  cv::imshow("RGB Camera", cv_ptr->image);
+  cv::waitKey(1);
+}
+
+// ======================== 深度相机回调 ========================
+
+void depth_callback(const sensor_msgs::msg::Image::SharedPtr & msg, uint64_t & counter)
+{
+    cv::Mat depth_image;
+    int HEIGHT = 480;
+    int WIDTH = 640;
+    depth_image = cv::Mat(HEIGHT, WIDTH, CV_32FC1, const_cast<uchar*>(msg->data.data()));
+    double min_val = 0.0, max_val = MAX_DEPTH;
+    cv::minMaxIdx(depth_image, &min_val, &max_val);
+    double range = max_val - min_val;
+
+    cv::Mat normalized;
+    if (range > 1e-6f) {
+      depth_image.convertTo(normalized, CV_8UC1, 255.0 / range, -min_val * 255.0 / range);
+    } else {
+      normalized = cv::Mat::zeros(depth_image.size(), CV_8UC1);
+    }
+
+    cv::equalizeHist(normalized, normalized);
+
+    cv::Mat color_image;
+    cv::applyColorMap(normalized, color_image, cv::COLORMAP_HOT);
+    cv::applyColorMap(color_image, color_image, cv::COLORMAP_HOT);
+    cv::imshow("Depth Camera", color_image);
+    cv::waitKey(1);
+}
+
+// ======================== 激光雷达回调 ========================
+
+void lidar_callback(const sensor_msgs::msg::PointCloud2::SharedPtr & msg)
+{
+  static uint64_t lidar_counter = 0;
+  ++lidar_counter;
+
+  pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>());
+  pcl::fromROSMsg(*msg, *cloud);
+
+  RCLCPP_INFO(rclcpp::get_logger("lidar_callback"),
+              "激光雷达点云: %ux%u  点数:%zu  序号:%lu",
+              msg->width, msg->height, cloud->size(), lidar_counter);
+}
+
+// ======================== 节点类 ========================
+
+class SensorSubscriberNode : public rclcpp::Node
 {
 public:
-  VCFSubscriber()
-  : Node("VCF_subscriber")
+  explicit SensorSubscriberNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions{})
+  : Node("sensor_subscriber", options)
   {
-    rclcpp::QoS qos_settings(1); // 参数1表示队列大小
-    qos_settings.reliable()      // 设置可靠性
-        .durability_volatile()   // 设置持久性：非持久性
-        .best_effort();
-    // 创建图像订阅者，订阅名为"vcf_image"的主题
-    subscription_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
-      "/xgb/image_raw/compressed", qos_settings, std::bind(&VCFSubscriber::image_callback, this, _1));
-    subscription_depth = this->create_subscription<sensor_msgs::msg::Image>(
-      "/xgb/image_raw/compressed/depth", qos_settings, std::bind(&VCFSubscriber::image_callback2, this, _1));
-    RCLCPP_INFO(this->get_logger(), "VCFSubscriber 已初始化");
-    subscription_pointcloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-      "/xgb/livox/lidar", qos_settings, std::bind(&VCFSubscriber::pointcloud_callback, this, _1));
+    auto qos = default_qos();
+
+    sub_rgb_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+      "/front_camera/image/compressed", qos,
+      [this](const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+        rgb_callback(msg, rgb_counter_);
+      });
+
+    sub_depth_ = this->create_subscription<sensor_msgs::msg::Image>(
+      "/front_depth/image", qos,
+      [this](const sensor_msgs::msg::Image::SharedPtr msg) {
+        depth_callback(msg, depth_counter_);
+      });
+
+    sub_lidar_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/front_lidar", qos,
+      [](const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+        lidar_callback(msg);
+      });
+
+    RCLCPP_INFO(this->get_logger(), "SensorSubscriberNode 已启动");
+    RCLCPP_INFO(this->get_logger(), "  - RGB 图像: /front_camera/image/compressed");
+    RCLCPP_INFO(this->get_logger(), "  - 深度图像: /front_depth/image");
+    RCLCPP_INFO(this->get_logger(), "  - 激光雷达: /front_lidar");
   }
-  ~VCFSubscriber()
-  {
-    // 析构函数中不需要额外清理，因为订阅者会自动释放资源
-  }
+
 private:
+  rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr sub_rgb_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_;
 
-
-  void image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg)
-  {
-    // 使用cv_bridge将ROS图像消息转换为OpenCV图像
-    cv_bridge::CvImagePtr cv_ptr;
-    try {
-      cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-    } catch (cv_bridge::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "图像转换失败: %s", e.what());
-      return;
-  }
-
-    camera_num += 1;
-    std::cout<< "Received camera image shape:" << cv_ptr->image.cols << "x" << cv_ptr->image.rows << " num: " << camera_num << std::endl;
-    // 显示图像
-    cv::imshow("Camera Image", cv_ptr->image);
-    cv::waitKey(1);
-  }
-
-  void image_callback2(const sensor_msgs::msg::Image::SharedPtr msg)
-  {
-    std::cout<< "Received depth image message." << std::endl;
-    cv::Mat depth_image;
-    depth_image = cv::Mat(480, 640, CV_32FC1, const_cast<uchar*>(msg->data.data()));
-    // color map
-    double min, max;
-    cv::minMaxIdx(depth_image, &min, &max);
-    cv::Mat adjMap;
-    depth_image.convertTo(adjMap, CV_8UC1, 255 / (max - min), -min * 255 / (max - min));
-    cv::Mat falseColorsMap;
-    cv::applyColorMap(adjMap, falseColorsMap, cv::COLORMAP_HOT);
-    camera_num += 1;
-    std::cout<< "Received depth image shape:" << depth_image.cols << "x" << depth_image.rows << " num: " << camera_num << std::endl;
-    // 显示图像
-    cv::imshow("Depth Image", falseColorsMap);
-    cv::waitKey(1);
-  }
-
-  void pointcloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
-  {
-    lidar_num += 1;
-   std::cout<< "Received point cloud message:" << lidar_num << std::endl;
-
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZI>());
-    pcl::fromROSMsg(*msg, *cloud);
-    std::cout << "Received point cloud with " << cloud->points.size() << " points." << std::endl;
-
-  }
-
-  rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr subscription_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_depth;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_pointcloud_;
+  uint64_t rgb_counter_   = 0;
+  uint64_t depth_counter_ = 0;
 };
+
+}  // namespace vcf_sensor
 
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<VCFSubscriber>());
+  auto node = std::make_shared<vcf_sensor::SensorSubscriberNode>();
+  rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
 }

@@ -15,20 +15,29 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+find_package(ament_cmake_python REQUIRED)
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
-# add opencv support
 find_package(OpenCV REQUIRED)
-# add msg image
 find_package(sensor_msgs REQUIRED)
-# add cv_bridge 
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 
+# C++ 可执行文件
 add_executable(subscriber_uesim_vc vcf_subscriber.cpp)
 ament_target_dependencies(subscriber_uesim_vc rclcpp std_msgs OpenCV sensor_msgs cv_bridge image_transport pcl_conversions)
+
+# Python 包安装
+ament_python_install_package(${PROJECT_NAME})
+
+# Python 脚本安装
+install(PROGRAMS
+    ${PROJECT_NAME}/sensor_subscriber.py
+    DESTINATION lib/${PROJECT_NAME}
+)
 
 install(TARGETS
     ARCHIVE DESTINATION lib
