@@ -13,123 +13,127 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import CompressedImage, Image, PointCloud2
-from sensor_msgs.msg import PointField
-import struct
-
+from sensor_msgs.msg import CompressedImage, PointCloud2
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 MAX_DEPTH = 10.0
 
 
-def depth_to_colormap(depth_array: np.ndarray) -> np.ndarray:
-    """将深度图像转换为伪彩色图像并应用直方图均衡化"""
-    depth_trunc = np.clip(depth_array, 0, MAX_DEPTH)
-    min_val, max_val = depth_trunc.min(), depth_trunc.max()
-    range_val = max_val - min_val
-
-    if range_val > 1e-6:
-        normalized = ((depth_trunc - min_val) / range_val * 255).astype(np.uint8)
-    else:
-        normalized = np.zeros(depth_trunc.shape, dtype=np.uint8)
-
-    equalized = cv2.equalizeHist(normalized)
-    color_map = cv2.applyColorMap(equalized, cv2.COLORMAP_HOT)
-    return color_map
+def default_qos() -> QoSProfile:
+    qos = QoSProfile(depth=1)
+    qos.reliability = ReliabilityPolicy.BEST_EFFORT
+    qos.durability = DurabilityPolicy.VOLATILE
+    return qos
 
 
-def parse_xyzilidar(msg: PointCloud2) -> np.ndarray:
-    """将 PointCloud2 消息解析为 numpy 数组"""
-    points = []
-    for i in range(0, msg.row_step, msg.point_step):
-        x = struct.unpack_from('f', msg.data, i + msg.fields[0].offset)[0]
-        y = struct.unpack_from('f', msg.data, i + msg.fields[1].offset)[0]
-        z = struct.unpack_from('f', msg.data, i + msg.fields[2].offset)[0]
-        intensity = struct.unpack_from('f', msg.data, i + msg.fields[3].offset)[0]
-        points.append([x, y, z, intensity])
-    return np.array(points, dtype=np.float32)
+class ImageDisplay:
+    def __init__(self, logger):
+        self._logger = logger
+        self._gui_enabled = bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
+        self._warned_no_gui = False
+        self._warned_imshow_failure = False
 
+    def show(self, window_name: str, image: np.ndarray) -> None:
+        if not self._gui_enabled:
+            if not self._warned_no_gui:
+                self._logger.warning('未检测到图形显示环境，已禁用图像窗口显示，仅继续订阅数据')
+                self._warned_no_gui = True
+            return
+
+        try:
+            cv2.imshow(window_name, image)
+            cv2.waitKey(1)
+        except cv2.error as exc:
+            if not self._warned_imshow_failure:
+                self._logger.warning(f'OpenCV 窗口显示失败，已自动关闭显示功能: {exc}')
+                self._warned_imshow_failure = True
+            self._gui_enabled = False
 
 class RGBCallback:
-    def __init__(self):
+    def __init__(self, display: ImageDisplay, logger):
         self.counter = 0
+        self.display = display
+        self.logger = logger
 
     def __call__(self, msg: CompressedImage):
-        self.counter += 1
         np_arr = np.frombuffer(msg.data, dtype=np.uint8)
         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        print("rgb callback")
         if image is None:
+            self.logger.warning('RGB 图像解码失败')
             return
-        cv2.imshow('RGB Camera', image)
-        cv2.waitKey(1)
+
+        self.counter += 1
+        self.logger.info(f'RGB 图像: {image.shape[1]}x{image.shape[0]}  序号: {self.counter}')
+        self.display.show('RGB Camera', image)
 
 
 class DepthCallback:
-    def __init__(self):
+    def __init__(self, display: ImageDisplay, logger):
         self.counter = 0
+        self.display = display
+        self.logger = logger
 
-    def __call__(self, msg: Image):
+    def __call__(self, msg: CompressedImage):
+        np_arr = np.frombuffer(msg.data, dtype=np.uint8)
+        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if image is None:
+            self.logger.warning('深度图像解码失败')
+            return
+
+        # 与 C++ 版本一致：depth = R + G/255，并截断最大深度
+        r = image[:, :, 2].astype(np.float32)
+        g = image[:, :, 1].astype(np.float32)
+        depth_float = r + g / 255.0
+        depth_float = np.minimum(depth_float, MAX_DEPTH)
+
+        # 与 C++ 版本一致：normalize + HOT colormap
+        depth_u8 = cv2.normalize(depth_float, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        depth_color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_HOT)
+
         self.counter += 1
-        HEIGHT, WIDTH = 480, 640
-        print("depth callback")
-        depth_image = np.ndarray(
-            shape=(HEIGHT, WIDTH),
-            dtype=np.float32,
-            buffer=msg.data
-        ).copy()
-
-        min_val, max_val = depth_image.min(), depth_image.max()
-        range_val = max_val - min_val
-
-        if range_val > 1e-6:
-            normalized = ((depth_image - min_val) / range_val * 255).astype(np.uint8)
-        else:
-            normalized = np.zeros(depth_image.shape, dtype=np.uint8)
-
-        equalized = cv2.equalizeHist(normalized)
-        color_map = cv2.applyColorMap(equalized, cv2.COLORMAP_HOT)
-        color_map = cv2.applyColorMap(color_map, cv2.COLORMAP_HOT)
-
-        cv2.imshow('Depth Camera', color_map)
-        cv2.waitKey(1)
-
+        self.logger.info(f'深度图像: {image.shape[1]}x{image.shape[0]}  序号: {self.counter}')
+        self.display.show('Depth Camera', depth_color)
 
 class LidarCallback:
-    def __init__(self):
+    def __init__(self, logger):
         self.counter = 0
+        self.logger = logger
 
     def __call__(self, msg: PointCloud2):
         self.counter += 1
-        print("lidar callback")
+        point_count = int(msg.width) * int(msg.height)
+        self.logger.info(
+            f'激光雷达点云: {msg.width}x{msg.height}  点数:{point_count}  序号:{self.counter}'
+        )
 
 class SensorSubscriberNode(Node):
     def __init__(self):
         super().__init__('sensor_subscriber_py')
-
-        qos = rclpy.qos.QoSProfile(depth=1)
-        qos.reliability = rclpy.qos.ReliabilityPolicy.BEST_EFFORT
-        qos.durability = rclpy.qos.DurabilityPolicy.VOLATILE
+        self.display = ImageDisplay(self.get_logger())
+        qos = default_qos()
 
         self.rgb_sub = self.create_subscription(
             CompressedImage,
             '/front_camera/image/compressed',
-            RGBCallback(),
+            RGBCallback(self.display, self.get_logger()),
             qos
         )
         self.depth_sub = self.create_subscription(
-            Image,
-            '/front_depth/image',
-            DepthCallback(),
+            CompressedImage,
+            '/front_depth/image/compressed',
+            DepthCallback(self.display, self.get_logger()),
             qos
         )
         self.lidar_sub = self.create_subscription(
             PointCloud2,
             '/front_lidar',
-            LidarCallback(),
+            LidarCallback(self.get_logger()),
             qos
         )
 

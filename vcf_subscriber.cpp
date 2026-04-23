@@ -59,29 +59,31 @@ void rgb_callback(const sensor_msgs::msg::CompressedImage::SharedPtr & msg, uint
 
 // ======================== 深度相机回调 ========================
 
-void depth_callback(const sensor_msgs::msg::Image::SharedPtr & msg, uint64_t & counter)
+void depth_callback(const sensor_msgs::msg::CompressedImage::SharedPtr & msg, uint64_t & /*counter*/)
 {
-    cv::Mat depth_image;
-    int HEIGHT = 480;
-    int WIDTH = 640;
-    depth_image = cv::Mat(HEIGHT, WIDTH, CV_32FC1, const_cast<uchar*>(msg->data.data()));
-    double min_val = 0.0, max_val = MAX_DEPTH;
-    cv::minMaxIdx(depth_image, &min_val, &max_val);
-    double range = max_val - min_val;
-
-    cv::Mat normalized;
-    if (range > 1e-6f) {
-      depth_image.convertTo(normalized, CV_8UC1, 255.0 / range, -min_val * 255.0 / range);
-    } else {
-      normalized = cv::Mat::zeros(depth_image.size(), CV_8UC1);
-    }
-
-    cv::equalizeHist(normalized, normalized);
-
-    cv::Mat color_image;
-    cv::applyColorMap(normalized, color_image, cv::COLORMAP_HOT);
-    cv::applyColorMap(color_image, color_image, cv::COLORMAP_HOT);
-    cv::imshow("Depth Camera", color_image);
+    cv_bridge::CvImagePtr cv_ptr;
+  try {
+    cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+  } catch (const cv_bridge::Exception & e) {
+    RCLCPP_ERROR(rclcpp::get_logger("rgb_callback"), "图像转换失败: %s", e.what());
+    return;
+  }
+    // image = r + g/255
+    cv::Mat depth_image = cv_ptr->image;
+    cv::Mat r_channel, g_channel;
+    cv::extractChannel(depth_image, r_channel, 2); // R通道
+    cv::extractChannel(depth_image, g_channel, 1); // G通道
+    cv::Mat depth_float;
+    cv::addWeighted(r_channel, 1.0, g_channel, 1.0 / 255.0, 0.0, depth_float);
+    depth_float.setTo(MAX_DEPTH, depth_float > MAX_DEPTH); // 限制最大深度
+    // colorize for visualization
+    cv::Mat depth_color;
+    cv::normalize(depth_float, depth_color, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+    cv::applyColorMap(depth_color, depth_color, cv::COLORMAP_HOT);
+    RCLCPP_INFO(rclcpp::get_logger("depth_callback"),
+                "深度图像: %dx%d",
+                depth_image.cols, depth_image.rows);
+    cv::imshow("Depth Camera", depth_color);
     cv::waitKey(1);
 }
 
@@ -116,9 +118,9 @@ public:
         rgb_callback(msg, rgb_counter_);
       });
 
-    sub_depth_ = this->create_subscription<sensor_msgs::msg::Image>(
-      "/front_depth/image", qos,
-      [this](const sensor_msgs::msg::Image::SharedPtr msg) {
+    sub_depth_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+      "/front_depth/image/compressed", qos,
+      [this](const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
         depth_callback(msg, depth_counter_);
       });
 
@@ -136,7 +138,7 @@ public:
 
 private:
   rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr sub_rgb_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
+  rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr sub_depth_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_lidar_;
 
   uint64_t rgb_counter_   = 0;
