@@ -1,185 +1,195 @@
 # uesim_subscriber
 
-`uesim_subscriber` 是一个 ROS 2 订阅示例包，用于接收 Unreal Engine 模拟环境发布的三类传感器数据：
+ROS2 订阅节点，用于接收和可视化 Unreal Engine 模拟器的传感器数据（RGB 图像、深度图像和 LiDAR 点云）。本包提供 C++ 和 Python 两种实现。
 
-- RGB 压缩图像
-- 深度压缩图像
-- LiDAR 点云
+## 功能特性
 
-本包同时提供 C++ 和 Python 两种实现，便于调试、验证消息流以及做后续二次开发。
+- **RGB 相机数据订阅** - 订阅压缩图像并实时显示
+- **深度图像处理** - 接收深度数据并使用热力图着色可视化
+- **点云数据处理** - 订阅 LiDAR 点云数据并转换为 PCL 格式
+- **实时可视化** - 使用 OpenCV 窗口实时显示传感器数据
+- **双语言实现** - 同时提供 C++ 和 Python 版本
 
-## 功能概览
+## 系统要求
 
-- 订阅 `/front_camera/image/compressed` 并用 OpenCV 实时显示 RGB 图像
-- 订阅 `/front_depth/image/compressed`，将编码后的深度图恢复为伪彩色热力图显示
-- 订阅 `/front_lidar`，输出点云尺寸、点数和接收序号
-- C++ 与 Python 版本统一使用 `Best Effort + Volatile + depth=1` 的 QoS
-- Python 版本在无图形环境时会自动关闭窗口显示，但仍继续订阅和打印日志
+- ROS2 (Humble/Foxy 或更高版本)
+- Ubuntu 20.04/22.04
+- OpenCV 4.x
+- PCL (Point Cloud Library)
+- cv_bridge
+- image_transport
+- Python 3.x
 
-## 包结构
-
-```text
-uesim_subscriber/
-├── CMakeLists.txt
-├── package.xml
-├── README.md
-├── vcf_subscriber.cpp
-└── uesim_subscriber/
-    ├── __init__.py
-    └── sensor_subscriber.py
-```
-
-## 依赖
-
-### ROS 2 依赖
-
-- `rclcpp`
-- `rclpy`
-- `sensor_msgs`
-- `cv_bridge`
-- `image_transport`
-- `pcl_conversions`
-- `ament_cmake_python`
-
-### 系统依赖
-
-- OpenCV
-- PCL
-- Python 3
-- `python3-opencv`
-
-示例安装命令：
+## 安装依赖
 
 ```bash
+# 安装 ROS2 依赖包
 sudo apt update
 sudo apt install -y \
-  ros-${ROS_DISTRO}-cv-bridge \
-  ros-${ROS_DISTRO}-image-transport \
-  ros-${ROS_DISTRO}-sensor-msgs \
-  ros-${ROS_DISTRO}-pcl-conversions \
-  libopencv-dev \
-  libpcl-dev \
-  python3-opencv
+    ros-${ROS_DISTRO}-cv-bridge \
+    ros-${ROS_DISTRO}-image-transport \
+    ros-${ROS_DISTRO}-sensor-msgs \
+    ros-${ROS_DISTRO}-pcl-conversions \
+    libpcl-dev \
+    libopencv-dev \
+    python3-opencv
 ```
 
 ## 编译
 
-在 ROS 2 工作区根目录执行：
-
 ```bash
+# 进入工作区根目录
+cd /home/user/ros_ws
+
+# 编译该包
 colcon build --packages-select uesim_subscriber
+
+# 加载环境变量
 source install/setup.bash
 ```
 
 ## 运行
 
-### C++ 节点
-
-- 可执行文件：`subscriber_uesim_vc`
-- 节点名：`sensor_subscriber`
+### C++ 版本
 
 ```bash
 ros2 run uesim_subscriber subscriber_uesim_vc
 ```
 
-### Python 节点
-
-- 入口脚本：`sensor_subscriber.py`
-- 节点名：`sensor_subscriber_py`
+### Python 版本
 
 ```bash
 ros2 run uesim_subscriber sensor_subscriber.py
 ```
 
-## 订阅话题
+## 订阅的话题
 
-| 话题 | 消息类型 | 说明 |
-| --- | --- | --- |
-| `/front_camera/image/compressed` | `sensor_msgs/msg/CompressedImage` | RGB 压缩图像 |
-| `/front_depth/image/compressed` | `sensor_msgs/msg/CompressedImage` | 深度压缩图像 |
-| `/front_lidar` | `sensor_msgs/msg/PointCloud2` | LiDAR 点云 |
-
-> 注意：源码中的启动日志把深度话题打印成了 `/front_depth/image`，但实际订阅的是 `/front_depth/image/compressed`。
-
-## 数据处理逻辑
-
-### RGB 图像
-
-- C++ 版本通过 `cv_bridge::toCvCopy(..., BGR8)` 转换压缩图像
-- Python 版本通过 `cv2.imdecode(..., cv2.IMREAD_COLOR)` 解码
-- 两个版本都会输出图像宽高和接收计数
-
-### 深度图像
-
-深度图并不是直接使用 `sensor_msgs/Image` 浮点深度，而是从压缩后的三通道图像中恢复：
-
-```text
-depth = R + G / 255.0
-```
-
-然后执行以下步骤：
-
-1. 将深度值裁剪到最大 `10.0 m`
-2. 归一化到 `0-255`
-3. 应用 `COLORMAP_HOT` 生成热力图
-
-### LiDAR 点云
-
-- C++ 版本使用 `pcl::fromROSMsg` 转为 `pcl::PointCloud<pcl::PointXYZI>`
-- Python 版本直接根据 `PointCloud2` 的 `width * height` 统计点数
-- 两个版本都会输出点云宽高、点数和接收序号
+| 话题名称 | 消息类型 | 描述 |
+|---------|---------|------|
+| `/front_camera/image/compressed` | `sensor_msgs/CompressedImage` | RGB 压缩图像 (BGR8) |
+| `/front_depth/image` | `sensor_msgs/Image` | 深度图像 (32FC1, 640×480) |
+| `/front_lidar` | `sensor_msgs/PointCloud2` | LiDAR 点云数据 (PointXYZI) |
 
 ## QoS 配置
 
-两个实现都使用等价的 QoS：
+所有订阅使用以下 QoS 设置：
 
-- History depth：`1`
-- Reliability：`BEST_EFFORT`
-- Durability：`VOLATILE`
+- **可靠性**: Best Effort
+- **持久性**: Volatile
+- **队列大小**: 1
 
-适用于高频传感器流的低延迟订阅场景。
+## 节点架构
 
-## 可视化行为
+### C++ 版本 (subscriber_uesim_vc)
+
+```
+sensor_subscriber (VCFSubscriber)
+├── rgb_callback      -> 处理 RGB 图像，显示到 "RGB Camera" 窗口
+├── depth_callback    -> 处理深度图像，热力图显示到 "Depth Camera" 窗口
+└── lidar_callback    -> 处理点云数据，记录日志信息
+```
+
+### Python 版本 (sensor_subscriber.py)
+
+```
+sensor_subscriber_py
+├── RGBCallback       -> 处理 RGB 图像，显示到 "RGB Camera" 窗口
+├── DepthCallback      -> 处理深度图像，热力图显示到 "Depth Camera" 窗口
+└── LidarCallback      -> 处理点云数据
+```
+
+## 可视化窗口
+
+运行后会弹出以下 OpenCV 窗口：
+
+- **RGB Camera** - 显示 RGB 相机图像
+- **Depth Camera** - 显示热力图 (COLORMAP_HOT) 着色的深度图像
+
+深度图像处理流程：归一化 -> 直方图均衡化 -> HOT 色彩映射 (应用两次以增强对比度)
+
+## 代码结构
+
+```
+uesim_subscriber/
+├── CMakeLists.txt                    # CMake 构建配置
+├── package.xml                       # ROS2 包清单
+├── vcf_subscriber.cpp                 # C++ 订阅节点实现
+└── uesim_subscriber/
+    └── sensor_subscriber.py           # Python 订阅节点实现
+```
+
+## 关键实现细节
+
+### 深度图可视化
+
+1. 将深度数据归一化到 0-255 范围
+2. 应用直方图均衡化增强对比度
+3. 应用 COLORMAP_HOT 色彩映射（应用两次增强效果）
+
+### 点云处理
+
+- C++ 版本使用 `pcl::fromROSMsg` 转换
+- Python 版本使用 `struct.unpack_from` 手动解析 PointCloud2 格式
+
+### 计数器
+
+- `rgb_counter_` / `RGBCallback.counter` - RGB 图像接收计数
+- `depth_counter_` / `DepthCallback.counter` - 深度图像接收计数
+- `lidar_counter` / `LidarCallback.counter` - 点云数据接收计数
+
+## 添加新的传感器订阅
 
 ### C++ 版本
 
-- 打开 `RGB Camera` 窗口显示 RGB 图像
-- 打开 `Depth Camera` 窗口显示深度热力图
+```cpp
+// 在构造函数中添加
+subscription_new_ = this->create_subscription<sensor_msgs::msg::YourType>(
+    "/your/topic", qos_settings,
+    std::bind(&SensorSubscriberNode::your_callback, this, _1));
+
+// 添加回调函数
+void your_callback(const sensor_msgs::msg::YourType::SharedPtr msg) {
+    // 处理数据
+}
+
+// 在 private 部分添加成员变量
+rclcpp::Subscription<sensor_msgs::msg::YourType>::SharedPtr subscription_new_;
+```
 
 ### Python 版本
 
-- 与 C++ 相同，显示 `RGB Camera` 和 `Depth Camera`
-- 如果未检测到 `DISPLAY` 或 `WAYLAND_DISPLAY`，则自动禁用窗口显示，仅保留订阅与日志输出
-- 如果 `cv2.imshow` 运行失败，也会自动关闭后续显示，避免节点退出
+```python
+def your_callback(msg):
+    # 处理数据
+    pass
 
-## 日志输出
+self.your_sub = self.create_subscription(
+    YourType,
+    '/your/topic',
+    your_callback,
+    qos
+)
+```
 
-运行过程中会持续打印类似信息：
+## 故障排除
 
-- RGB 图像尺寸与序号
-- 深度图像尺寸与序号
-- 点云宽高、点数与序号
+### 没有图像显示
 
-这适合用于确认模拟器是否稳定发布数据。
+- 确认 UE 模拟器正在运行并发布数据
+- 检查话题名称是否正确：`ros2 topic list`
+- 验证话题是否有数据：`ros2 topic echo /front_camera/image/compressed --no-arr`
 
-## 常见问题
+### 编译错误
 
-### 没有看到图像窗口
+- 确认已安装所有依赖包
+- 检查 ROS2 环境变量：`echo $ROS_DISTRO`
+- 清理并重新编译：`rm -rf build install log && colcon build`
 
-- 确认当前环境有桌面显示会话
-- 检查是否设置了 `DISPLAY` 或 `WAYLAND_DISPLAY`
-- 在无图形环境中，Python 版会自动退化为仅日志模式；C++ 版仍会尝试调用 OpenCV 窗口
+### 点云数据无法接收
 
-### 没有收到消息
-
-- 用 `ros2 topic list` 确认话题存在
-- 用 `ros2 topic echo /front_lidar --once` 或 `ros2 topic hz /front_camera/image/compressed` 检查是否有数据
-- 确认发布端 QoS 与订阅端兼容
-
-### 深度图显示异常
-
-- 确认发布端输出的是与当前解码逻辑匹配的压缩三通道深度图
-- 当前实现假定深度编码方式为 `R + G/255.0`
+- 检查 PCL 库是否正确安装：`pkg-config --modversion pcl_common`
+- 确认 QoS 设置与发布者匹配
+- 验证 PointCloud2 消息字段结构
 
 ## 许可证
 
