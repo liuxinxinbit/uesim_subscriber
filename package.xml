@@ -1,33 +1,28 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format2.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="2">
   <name>uesim_subscriber</name>
-  <version>0.15.3</version>
-  <description>订阅 RGB 相机、深度相机和激光雷达数据的示例程序</description>
-  <maintainer email="sloretz@openrobotics.org">Shane Loretz</maintainer>
-  <maintainer email="aditya.pande@openrobotics.org">Aditya Pande</maintainer>
+  <version>0.2.0</version>
+  <description>UESIM ROS2 sensor subscriber examples in C++ and Python.</description>
+  <maintainer email="user@example.com">UESIM Maintainer</maintainer>
   <license>Apache License 2.0</license>
-  <author>Mikael Arguedas</author>
-  <author>Morgan Quigley</author>
-  <author email="jacob@openrobotics.org">Jacob Perron</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <build_depend>rclcpp</build_depend>
+  <build_depend>rclpy</build_depend>
   <build_depend>std_msgs</build_depend>
   <build_depend>sensor_msgs</build_depend>
-  <build_depend>cv_bridge</build_depend>
-  <build_depend>image_transport</build_depend>
-  <build_depend>pcl_conversions</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>robots_dog_msgs</build_depend>
   <build_depend>python3-opencv</build_depend>
 
   <exec_depend>rclcpp</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>image_transport</exec_depend>
-  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>robots_dog_msgs</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>

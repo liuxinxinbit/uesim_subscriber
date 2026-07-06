@@ -1,196 +1,81 @@
 # uesim_subscriber
 
-ROS2 订阅节点，用于接收和可视化 Unreal Engine 模拟器的传感器数据（RGB 图像、深度图像和 LiDAR 点云）。本包提供 C++ 和 Python 两种实现。
+UESIM ROS2 订阅示例包，演示如何接收、解析和显示从 `ue_zenoh_bridge` 转出的传感器数据。
 
-## 功能特性
+提供两个版本：
 
-- **RGB 相机数据订阅** - 订阅压缩图像并实时显示
-- **深度图像处理** - 接收深度数据并使用热力图着色可视化
-- **点云数据处理** - 订阅 LiDAR 点云数据并转换为 PCL 格式
-- **实时可视化** - 使用 OpenCV 窗口实时显示传感器数据
-- **双语言实现** - 同时提供 C++ 和 Python 版本
+- C++：`subscriber_uesim_vc`
+- Python：`sensor_subscriber.py`
 
-## 系统要求
+## 订阅内容
 
-- ROS2 (Humble/Foxy 或更高版本)
-- Ubuntu 20.04/22.04
-- OpenCV 4.x
-- PCL (Point Cloud Library)
-- cv_bridge
-- image_transport
-- Python 3.x
+| Topic | Type | 示例处理 |
+| --- | --- | --- |
+| `/front_camera/image/compressed` | `sensor_msgs/msg/CompressedImage` | 解码并显示 RGB 图像 |
+| `/front_depth/image/compressed` | `sensor_msgs/msg/CompressedImage` | 解码 PNG 深度图并伪彩显示 |
+| `/front_lidar/lidar` | `sensor_msgs/msg/PointCloud2` | 显示 2D 俯视点云，并打印首点坐标 |
+| `/imu` | `sensor_msgs/msg/Imu` | 打印姿态、角速度、线加速度 |
+| `/odom` | `nav_msgs/msg/Odometry` | 打印位置和线速度 |
+| `/gps` | `robots_dog_msgs/msg/UniRtkPvh` | 打印经纬度、高度和航向 |
 
-## 安装依赖
+## 安装
 
 ```bash
-# 安装 ROS2 依赖包
 sudo apt update
-sudo apt install -y \
-    ros-${ROS_DISTRO}-cv-bridge \
-    ros-${ROS_DISTRO}-image-transport \
-    ros-${ROS_DISTRO}-sensor-msgs \
-    ros-${ROS_DISTRO}-pcl-conversions \
-    libpcl-dev \
-    libopencv-dev \
-    python3-opencv
+sudo apt install -y python3-opencv libopencv-dev
 ```
 
 ## 编译
 
 ```bash
-# 进入工作区根目录
-cd /home/user/ros_ws
-
-# 编译该包
+cd /home/xin/ros_ws
+source /opt/ros/humble/setup.bash
 colcon build --packages-select uesim_subscriber
-
-# 加载环境变量
 source install/setup.bash
 ```
 
-## 运行
+## 使用
 
-### C++ 版本
+先启动 UE 仿真和 bridge：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/xin/ros_ws/install/setup.bash
+ros2 run ue_zenoh_bridge ue_zenoh_bridge --key-expr 'rt/**'
+```
+
+运行 C++ 示例：
 
 ```bash
 ros2 run uesim_subscriber subscriber_uesim_vc
 ```
 
-### Python 版本
+运行 Python 示例：
 
 ```bash
 ros2 run uesim_subscriber sensor_subscriber.py
 ```
 
-## 订阅的话题
+运行后会显示 RGB、深度和 LiDAR 俯视图窗口，同时在终端打印 IMU、里程计和 GPS 数据。LiDAR 窗口中，白点为雷达位置，`front` 方向为车体前方。
 
-| 话题名称 | 消息类型 | 描述 |
-|---------|---------|------|
-| `/front_camera/image/compressed` | `sensor_msgs/CompressedImage` | RGB 压缩图像 (BGR8) |
-| `/front_depth/image` | `sensor_msgs/Image` | 深度图像 (32FC1, 640×480) |
-| `/front_lidar` | `sensor_msgs/PointCloud2` | LiDAR 点云数据 (PointXYZI) |
+## 查看数据
 
-## QoS 配置
-
-所有订阅使用以下 QoS 设置：
-
-- **可靠性**: Best Effort
-- **持久性**: Volatile
-- **队列大小**: 1
-
-## 节点架构
-
-### C++ 版本 (subscriber_uesim_vc)
-
-```
-sensor_subscriber (VCFSubscriber)
-├── rgb_callback      -> 处理 RGB 图像，显示到 "RGB Camera" 窗口
-├── depth_callback    -> 处理深度图像，热力图显示到 "Depth Camera" 窗口
-└── lidar_callback    -> 处理点云数据，记录日志信息
+```bash
+ros2 topic list
+ros2 topic echo /imu
+ros2 topic echo /odom
+ros2 topic echo /gps
+ros2 topic echo /front_lidar/lidar --no-arr
 ```
 
-### Python 版本 (sensor_subscriber.py)
+深度图是压缩 PNG，topic 是：
 
-```
-sensor_subscriber_py
-├── RGBCallback       -> 处理 RGB 图像，显示到 "RGB Camera" 窗口
-├── DepthCallback      -> 处理深度图像，热力图显示到 "Depth Camera" 窗口
-└── LidarCallback      -> 处理点云数据
+```text
+/front_depth/image/compressed
 ```
 
-## 可视化窗口
+在 rqt 中查看时，选择 `/front_depth/image` 并使用 `compressed` transport。
 
-运行后会弹出以下 OpenCV 窗口：
+## 无图形界面
 
-- **RGB Camera** - 显示 RGB 相机图像
-- **Depth Camera** - 显示热力图 (COLORMAP_HOT) 着色的深度图像
-
-深度图像处理流程：归一化 -> 直方图均衡化 -> HOT 色彩映射 (应用两次以增强对比度)
-
-## 代码结构
-
-```
-uesim_subscriber/
-├── CMakeLists.txt                    # CMake 构建配置
-├── package.xml                       # ROS2 包清单
-├── vcf_subscriber.cpp                 # C++ 订阅节点实现
-└── uesim_subscriber/
-    └── sensor_subscriber.py           # Python 订阅节点实现
-```
-
-## 关键实现细节
-
-### 深度图可视化
-
-1. 将深度数据归一化到 0-255 范围
-2. 应用直方图均衡化增强对比度
-3. 应用 COLORMAP_HOT 色彩映射（应用两次增强效果）
-
-### 点云处理
-
-- C++ 版本使用 `pcl::fromROSMsg` 转换
-- Python 版本使用 `struct.unpack_from` 手动解析 PointCloud2 格式
-
-### 计数器
-
-- `rgb_counter_` / `RGBCallback.counter` - RGB 图像接收计数
-- `depth_counter_` / `DepthCallback.counter` - 深度图像接收计数
-- `lidar_counter` / `LidarCallback.counter` - 点云数据接收计数
-
-## 添加新的传感器订阅
-
-### C++ 版本
-
-```cpp
-// 在构造函数中添加
-subscription_new_ = this->create_subscription<sensor_msgs::msg::YourType>(
-    "/your/topic", qos_settings,
-    std::bind(&SensorSubscriberNode::your_callback, this, _1));
-
-// 添加回调函数
-void your_callback(const sensor_msgs::msg::YourType::SharedPtr msg) {
-    // 处理数据
-}
-
-// 在 private 部分添加成员变量
-rclcpp::Subscription<sensor_msgs::msg::YourType>::SharedPtr subscription_new_;
-```
-
-### Python 版本
-
-```python
-def your_callback(msg):
-    # 处理数据
-    pass
-
-self.your_sub = self.create_subscription(
-    YourType,
-    '/your/topic',
-    your_callback,
-    qos
-)
-```
-
-## 故障排除
-
-### 没有图像显示
-
-- 确认 UE 模拟器正在运行并发布数据
-- 检查话题名称是否正确：`ros2 topic list`
-- 验证话题是否有数据：`ros2 topic echo /front_camera/image/compressed --no-arr`
-
-### 编译错误
-
-- 确认已安装所有依赖包
-- 检查 ROS2 环境变量：`echo $ROS_DISTRO`
-- 清理并重新编译：`rm -rf build install log && colcon build`
-
-### 点云数据无法接收
-
-- 检查 PCL 库是否正确安装：`pkg-config --modversion pcl_common`
-- 确认 QoS 设置与发布者匹配
-- 验证 PointCloud2 消息字段结构
-
-## 许可证
-
-Apache License 2.0
+没有桌面环境时，Python 示例会自动禁用 OpenCV 窗口，只打印日志。C++ 示例需要图形环境显示窗口；如果只想看日志，可以注释 `cv::imshow` 相关代码。

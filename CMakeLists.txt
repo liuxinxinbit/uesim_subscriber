@@ -6,9 +6,9 @@ if(POLICY CMP0146)
 endif()
 
 
-# Default to C++14
+# Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -20,15 +20,16 @@ find_package(ament_cmake_python REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(pcl_conversions REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(robots_dog_msgs REQUIRED)
 
 # C++ 可执行文件
 add_executable(subscriber_uesim_vc vcf_subscriber.cpp)
-ament_target_dependencies(subscriber_uesim_vc rclcpp std_msgs OpenCV sensor_msgs cv_bridge image_transport pcl_conversions)
+target_include_directories(subscriber_uesim_vc PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(subscriber_uesim_vc ${OpenCV_LIBS})
+ament_target_dependencies(subscriber_uesim_vc rclcpp std_msgs sensor_msgs nav_msgs robots_dog_msgs)
 
 # Python 包安装
 ament_python_install_package(${PROJECT_NAME})
@@ -38,11 +39,6 @@ install(PROGRAMS
     ${PROJECT_NAME}/sensor_subscriber.py
     DESTINATION lib/${PROJECT_NAME}
 )
-
-install(TARGETS
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin)
 
 install(TARGETS
   subscriber_uesim_vc
